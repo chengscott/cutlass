@@ -459,6 +459,23 @@ public:
     else {
       CUTLASS_ASSERT(cuda_adapter == nullptr);
 
+      // fz-smem-optin: opt this translation unit's own Kernel2<GemmKernel> into
+      // >48KB dynamic smem. init_device_props() sets the opt-in but is gated by a
+      // cross-TU-merged device_ordinal_ static, so when two TUs instantiate the
+      // identical >48KB kernel type the second TU's kernel-function copy is left
+      // un-opted and its launch returns cudaErrorInvalidValue. Setting it here on
+      // the exact symbol about to launch is robust regardless of that guard.
+      if constexpr (kSharedStorageSize >= (48 << 10)) {
+        cudaError_t optin_result = cudaFuncSetAttribute(
+          Kernel2<GemmKernel>,
+          cudaFuncAttributeMaxDynamicSharedMemorySize,
+          kSharedStorageSize);
+        if (optin_result != cudaSuccess) {
+          CUTLASS_TRACE_HOST("  cudaFuncSetAttribute() returned error " << cudaGetErrorString(optin_result));
+          return Status::kErrorInternal;
+        }
+      }
+
       Kernel2<GemmKernel><<<grid, block, kSharedStorageSize, stream>>>(params_);
 
       // Query for errors
